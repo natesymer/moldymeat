@@ -41,7 +41,7 @@ async function initSequelize() {
 
 	return s;
 }
-
+(async function() {
 const sequelize = await initSequelize();
 
 const MigrationState = sequelize.define("MigrationState", {
@@ -62,26 +62,54 @@ async function saveMigrationState(sequelize, state) {
 	await MigrationState.create({json: JSON.stringify(state)});
 }
 
+/* Removes any undefined properties on obj. deep. */
+function removeUndefined(obj) {
+	for (let k in obj) {
+		if (obj[k] === undefined) delete obj[k];
+		else if (typeof obj[k] === 'object') removeUndefined(obj[k]);
+	}
+}
+
+/* prepares attributes for serialization and storage in a MigrationState */
 function moldyMeatSanitizeAttributes(atts) {
 	let attributes = {};
 
-	for (const [dbName, {Model, prototype, type: _type, ..._options}] of Object.entries(atts)) {
-		let type = {name: _type.key};
-		for (const [k, v] of Object.entries(_type)) {
-			if (v !== undefined) { // the JSON roundtrip kills these atts
-				type[k] = v;
-			}
-		}	
-	
-		let options = {};
-		for (const [k, v] of Object.entries(_options)) {
-			options[k] = v;
-		}
-
-		attributes[dbName] = options;
+	for (const [k, v] of Object.entries(atts)) {
+		attributes[k] = moldyMeatFlattenAttribute(v);
 	}
-	
+
+	removeUndefined(attributes); // JSON roundtrip kills undefined atts
 	return attributes;
+}
+
+/* turns an attribute into something that can be JSON serialized and stored */
+function moldyMeatFlattenAttribute(att) {
+	// If we're working with a short def: (e.g. {column: DataTypes.INTEGER})
+	if (Object.values(DataTypes).includes(att)) return att.key;
+
+	// Otherwise, we have something like {column: {type: DataTypes.INTEGER, ...}}
+	const {Model, prototype, type: _type, ..._options} = att;
+	let type = {typekey: _type.key};
+	for (const [k, v] of Object.entries(_type)) {
+		type[k] = v;
+	}	
+
+	return {type, ..._options};
+}
+
+/* restores an attribute from its serialized form to the correct form */
+function moldyMeatHydrateAttribute(_att) {
+	// e.g. {column: DataTypes.INTEGER})
+	if (typeof _att === 'string') return DataTypes[_att];
+
+	// e.g. {column: {type: DataTypes.INTEGER, ...}}
+	const {type: _type, ...att} = _att;
+	const {typekey, ...type} = _type;
+ 
+	return {
+		type: {...DataTypes[typekey], ...type},
+		...att
+	};
 }
 
 async function migrate(sequelize) {
@@ -99,26 +127,34 @@ async function migrate(sequelize) {
 	const changes = detailedDiff(migState, models);
 	await saveMigrationState(sequelize, models);
 
-	let ops = [];
+	const qi = sequelize.getQueryInterface();
+
+	// TODO: Figure out ordering
 
 	for (const [tableName, v] of Object.entries(changes['added'])) {
-		// TODO: figure out better
+		// TODO: figure out better isCreate test
 		const isCreate = Object.keys(v).includes('id');
 		if (isCreate) {
-			console.log(`Create Table ${tableName}`, v);
-			// TODO: generate CreateStatement SQL using all cols from v
+			let atts = {};
+			for (const [k, att] of Object.entries(v)) {
+				atts[k] = moldyMeatHydrateAttribute(att);
+			}
+			console.log(`Create Table ${tableName}`, atts);
+			qi.createTable(tableName, atts);
 		} else {
-			for (const [fieldName, options] of Object.entries(v)) {
-				console.log(`Add Column ${tableName}(${fieldName})`, options);
-				// TODO: generate add column statement
+			for (const [fieldName, _att] of Object.entries(v)) {
+				const att = moldyMeatHydrateAttribute(_att);
+				console.log(`Add Column ${tableName}(${fieldName})`, att);
+				qi.addColumn(tableName, fieldName, att);
 			}
 		}
 	}
 
 	for (const [tableName, v] of Object.entries(changes['updated'])) {
-		for (const [fieldName, options] of Object.entries(v)) {
-			console.log("Alter column ${tableName}(${fieldName})", options);
-			// TODO: generate alter table statement
+		for (const [fieldName, _att] of Object.entries(v)) {
+			const att = moldyMeatHydrateAttribute(_att);
+			console.log("Alter column ${tableName}(${fieldName})", att);
+			qi.changeColumn(tableName, fieldName, att);
 		}
 	}
 
@@ -126,29 +162,38 @@ async function migrate(sequelize) {
 		const isDrop = !Object.keys(models).includes(tableName); //Object.keys(v).includes('id');
 		if (isDrop) {
 			console.log(`Drop table ${tableName}`);
-			// TODO: generate dropTable
+			qi.dropTable(tableName);
 		} else {
 			for (const [fieldName, options] of Object.entries(v)) {
-				console.log(`Drop column ${tableName}(${fieldName})`, options);
-				// TODO: generate drop column statement
+				console.log(`Drop column ${tableName}(${fieldName})`);
+				qi.removeColumn(tableName, fieldName);
 			}
 		}
 	}
-
-	const qi = sequelize.getQueryInterface();
-	for (const [op, args] in ops) {
-		qi[op](...args);
-	}
 }
 
-const U = sequelize.define('U', {name: DataTypes.STRING}, {tableName: 'u', paranoid: true});
-const A = sequelize.define("A", {addr: DataTypes.STRING}, {tableName: "a", paranoid: true});
+async function one() {
+	const seq = await initSequelize();
+	const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+	const A = seq.define("A", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
 
-A.hasMany(U, {foreignKey: 'a_id'});
+	A.hasMany(U, {foreignKey: 'a_id'});
 
-await migrate(sequelize);
+	await migrate(seq);
+}
 
-const A2 = sequelize.define("A", {addr: DataTypes.STRING, zip: DataTypes.STRING}, {tableName: "a", paranoid: true});
+async function two() {
+	const seq = await initSequelize();
+	const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+	const A = seq.define("A", {addr: {type: DataTypes.TEXT}, zip: {type: DataTypes.TEXT}}, {paranoid: true});
 
-await migrate(sequelize);
-await migrate(sequelize);
+	A.hasMany(U, {foreignKey: 'a_id'});
+
+	await migrate(seq);
+}
+
+await one();
+await two();
+
+//await migrate(sequelize);
+})();
