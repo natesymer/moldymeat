@@ -27,7 +27,7 @@ class MoldyMeat {
 		if (!this.sequelize) {
 			// TODO: throw error
 		}
-		this.stateModel = sequelize.define("MoldyMeatState", {
+		this.stateModel = this.sequelize.define("MoldyMeatState", {
 			json: DataTypes.TEXT
 		});
 		await this.stateModel.sync(); // yes...
@@ -81,8 +81,11 @@ class MoldyMeat {
 		const migState = await this.loadSchemaState();
 	
 		const models = {};
+
+		// topoModels = [mostDependedUponModel, ..., least depended upon model]	
+		const topoModels = this.sequelize.modelManager.getModelsTopoSortedByForeignKey();	
 		const stateTableName = this.stateModel.getTableName();
-		for (const v of Object.values(this.sequelize.models)) {
+		for (const v of topoModels) {
 			const tableName = v.getTableName();
 			if (tableName === stateTableName) continue;
 			models[tableName] = objectMap(v.getAttributes(), ([k, v]) => [k, this._flattenAttribute(v)]);
@@ -95,7 +98,8 @@ class MoldyMeat {
 
 		const qi = this.sequelize.getQueryInterface();
 
-		// TODO: Figure out create/drop tables w/r/t foreign keys
+		const createTables = [];
+		const dropTables = [];
 
 		for (const [tableName, v] of Object.entries(changes['added'])) {
 			// TODO: figure out better isCreate test
@@ -105,8 +109,7 @@ class MoldyMeat {
 				for (const [k, att] of Object.entries(v)) {
 					atts[k] = this._hydrateAttribute(att);
 				}
-				console.log(`Create Table ${tableName}`, atts);
-				qi.createTable(tableName, atts);
+				createTables.push([tableName, atts]);
 			} else {
 				for (const [fieldName, _att] of Object.entries(v)) {
 					const att = this._hydrateAttribute(_att);
@@ -127,14 +130,29 @@ class MoldyMeat {
 		for (const [tableName, v] of Object.entries(changes['deleted'])) {
 			const isDrop = !Object.keys(models).includes(tableName); //Object.keys(v).includes('id');
 			if (isDrop) {
-				console.log(`Drop table ${tableName}`);
-				qi.dropTable(tableName);
+				dropTables.push(tableName);
 			} else {
 				for (const [fieldName, options] of Object.entries(v)) {
 					console.log(`Drop column ${tableName}(${fieldName})`);
 					qi.removeColumn(tableName, fieldName);
 				}
 			}
+		}
+
+		// TODO: sort createTables and dropTables
+
+		console.log("BEFORE", createTables, dropTables);
+		const topoTables = topoModels.map(x => x.getTableName());
+		createTables.sort((a, b) => topoTables.indexOf(a[0]) - topoTables.indexOf(b[0]));
+		dropTables.sort((a, b) => topoTables.indexOf(a) - topoTables.indexOf(b));
+		console.log("AFTER", createTables, dropTables);
+		for (const tableName of dropTables) {
+			console.log(`Drop table ${tableName}`);
+			qi.dropTable(tableName);
+		}
+		for (const [tableName, atts] of createTables) {
+			console.log(`Create Table ${tableName}`, atts);
+			qi.createTable(tableName, atts);
 		}
 	}
 

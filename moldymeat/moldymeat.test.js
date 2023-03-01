@@ -2,7 +2,7 @@ const { Sequelize, DataTypes } = require('sequelize');
 const MoldyMeat = require('./moldymeat');
 
 const dbSettings = {
-	database: 'testme12346',
+	database: 'testme12347',
 	username: 'postgres',
 	password: 'password',
 	host: 'localhost',
@@ -25,6 +25,7 @@ async function initSequelize() {
 	try {
 		await client.query(`CREATE DATABASE "${dbSettings.database}";`);
 	} catch (err) {};
+	await client.end();
 
 	let s = new Sequelize({
 		...dbSettings,
@@ -42,8 +43,15 @@ async function initSequelize() {
 	return s;
 }
 
-(async function() {
-async function one() {
+
+beforeEach(async () => {
+	console.log("Clearing database...");
+	const s = await initSequelize();
+	await s.drop();
+	return s.close();
+});
+
+test('can sync empty database with models', async () => {
 	const seq = await initSequelize();
 	const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
 	const A = seq.define("A", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
@@ -52,22 +60,31 @@ async function one() {
 
 	const mm = new MoldyMeat({sequelize: seq});
 	await mm.initialize();
-	await mm.migrate();
-}
+	await mm.updateSchema();
+	await seq.close();
+});
 
-async function two() {
+test('can sync existing database with model changes', async () => {
+	/* First time moldymeat is ran against models */
 	const seq = await initSequelize();
-	const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
-	const A = seq.define("A", {addr: {type: DataTypes.TEXT}, zip: {type: DataTypes.TEXT}}, {paranoid: true});
-
+	let U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+	let A = seq.define("A", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
 	A.hasMany(U, {foreignKey: 'a_id'});
 
-	const mm = new MoldyMeat({sequelize: seq});
+	let mm = new MoldyMeat({sequelize: seq});
 	await mm.initialize();
-	await mm.migrate();
-}
+	await mm.updateSchema();
+	await seq.close();
 
-await one();
-await two();
+	/* run moldymeat again against the same models */
+	const seq2 = await initSequelize();
+	U = seq2.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+	A = seq2.define("A", {addr: {type: DataTypes.TEXT}, zip: {type: DataTypes.TEXT}}, {paranoid: true});
+	A.hasMany(U, {foreignKey: 'a_id'});
 
-})();
+	mm = new MoldyMeat({sequelize: seq2});
+	await mm.initialize();
+	await mm.updateSchema();
+	await seq2.close();
+});
+

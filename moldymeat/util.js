@@ -8,7 +8,7 @@
 	@returns {object} Returns obj after mutations, for convenience's sake.
 	@since 0.0.1
 */
-export function removeUndefined(obj) {
+function removeUndefined(obj) {
 	for (const k in obj) {
 		if (obj[k] === undefined) delete obj[k];
 		else if (typeof obj[k] === 'object') removeUndefined(obj[k]);
@@ -23,7 +23,9 @@ export function removeUndefined(obj) {
 	@returns {object} An object built from mapping fn over obj's entries.
 	@since 0.0.1
 */
-export function objectMap(obj, fn) {
+function objectMap(obj, fn) {
 	return Object.fromEntries(Object.entries(obj).map(fn));
 }
+
+module.exports = {removeUndefined, objectMap};
 
