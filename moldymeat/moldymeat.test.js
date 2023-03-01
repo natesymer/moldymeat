@@ -84,7 +84,7 @@ test('can sync existing database with model changes', async () => {
 		A.hasMany(U, {foreignKey: 'a_id'});
 	});
 });
-/*
+
 
 test('can drop many tables that have foreign key dependencies on eachother', async () => {
 	const seq = await initSequelize();
@@ -107,4 +107,4 @@ test('can drop many tables that have foreign key dependencies on eachother', asy
 	await mm.updateSchema();
 	await seq2.close();
 });
-*/
+

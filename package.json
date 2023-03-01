@@ -5,7 +5,7 @@
   "main": "moldymeat/index.js",
   "scripts": {
     "test": "jest",
-    "docs": "jsdoc2md  moldymeat/**/*.js*",
+    "docs": "jsdoc2md  moldymeat/**/*.js* > docs.md",
     "db": "scripts/run-postgres.sh",
     "local": "sh -c \"(trap 'kill 0' SIGINT; (npm run db) & (npm run web))\""
   },
