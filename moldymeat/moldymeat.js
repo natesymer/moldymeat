@@ -22,6 +22,7 @@ class MoldyMeat {
 	/**
 	 * Initializes MoldyMeat. Must be called before calling other methods.
 	 * @async
+	 * @returns {MoldyMeat} Returns a reference to this for convenience
 	 */
 	async initialize() {
 		if (!this.sequelize) {
@@ -32,6 +33,7 @@ class MoldyMeat {
 		});
 		await this.stateModel.sync(); // yes...
 		this.isInitialized = true;
+		return this;
 	}
 
 	/**
@@ -100,6 +102,9 @@ class MoldyMeat {
 
 		const createTables = [];
 		const dropTables = [];
+		const addColumns = [];
+		const changeColumns = [];
+		const removeColumns = [];
 
 		for (const [tableName, v] of Object.entries(changes['added'])) {
 			// TODO: figure out better isCreate test
@@ -114,7 +119,7 @@ class MoldyMeat {
 				for (const [fieldName, _att] of Object.entries(v)) {
 					const att = this._hydrateAttribute(_att);
 					console.log(`Add Column ${tableName}(${fieldName})`, att);
-					qi.addColumn(tableName, fieldName, att);
+					await qi.addColumn(tableName, fieldName, att);
 				}
 			}
 		}
@@ -123,7 +128,7 @@ class MoldyMeat {
 			for (const [fieldName, _att] of Object.entries(v)) {
 				const att = this._hydrateAttribute(_att);
 				console.log(`Alter column ${tableName}(${fieldName})`, att);
-				qi.changeColumn(tableName, fieldName, att);
+				await qi.changeColumn(tableName, fieldName, att);
 			}
 		}
 
@@ -134,7 +139,7 @@ class MoldyMeat {
 			} else {
 				for (const [fieldName, options] of Object.entries(v)) {
 					console.log(`Drop column ${tableName}(${fieldName})`);
-					qi.removeColumn(tableName, fieldName);
+					await qi.removeColumn(tableName, fieldName);
 				}
 			}
 		}
@@ -142,17 +147,19 @@ class MoldyMeat {
 		// TODO: sort createTables and dropTables
 
 		console.log("BEFORE", createTables, dropTables);
-		const topoTables = topoModels.map(x => x.getTableName());
+		let topoTables = topoModels.map(x => x.getTableName());
+		topoTables.reverse();
 		createTables.sort((a, b) => topoTables.indexOf(a[0]) - topoTables.indexOf(b[0]));
 		dropTables.sort((a, b) => topoTables.indexOf(a) - topoTables.indexOf(b));
 		console.log("AFTER", createTables, dropTables);
+
 		for (const tableName of dropTables) {
 			console.log(`Drop table ${tableName}`);
-			qi.dropTable(tableName);
+			await qi.dropTable(tableName);
 		}
 		for (const [tableName, atts] of createTables) {
 			console.log(`Create Table ${tableName}`, atts);
-			qi.createTable(tableName, atts);
+			await qi.createTable(tableName, atts);
 		}
 	}
 
