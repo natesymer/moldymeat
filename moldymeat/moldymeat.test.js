@@ -69,7 +69,7 @@ test('can sync empty database with models', async () => {
 });
 
 
-test('can sync existing database with model changes', async () => {
+test('can sync a new field on a model', async () => {
 	await updateSchemaTo(async seq => {
 		const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
 		const A = seq.define("A", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
@@ -87,24 +87,26 @@ test('can sync existing database with model changes', async () => {
 
 
 test('can drop many tables that have foreign key dependencies on eachother', async () => {
-	const seq = await initSequelize();
-	let Z = seq.define('Z', {name: {type: DataTypes.TEXT}}, {paranoid: true});
-	let D = seq.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
-	let P = seq.define("P", {number: {type: DataTypes.INTEGER}}, {paranoid: true});
-	Z.hasMany(D, {foreignKey: 'z_id'});
-	P.hasMany(Z, {foreignKey: 'p_id'});
-
-	let mm = new MoldyMeat({sequelize: seq});
-	await mm.initialize();
-	await mm.updateSchema();
-	await seq.close();
-
-	const seq2 = await initSequelize();
-	D = seq2.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
-
-	mm = new MoldyMeat({sequelize: seq2});
-	await mm.initialize();
-	await mm.updateSchema();
-	await seq2.close();
+	await updateSchemaTo(async seq => {
+		const Z = seq.define('Z', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+		const D = seq.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
+		const P = seq.define("P", {number: {type: DataTypes.INTEGER}}, {paranoid: true});
+		Z.hasMany(D, {foreignKey: 'z_id'});
+		P.hasMany(Z, {foreignKey: 'p_id'});
+	});
+	await updateSchemaTo(async seq => {
+		const D = seq.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
+	});
 });
 
+test('can add a foreign key relationship', async () => {
+	await updateSchemaTo(async seq => {
+		const Z = seq.define('Z', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+		const D = seq.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
+	});
+	await updateSchemaTo(async seq => {
+		const Z = seq.define('Z', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+		const D = seq.define("D", {addr: {type: DataTypes.TEXT}}, {paranoid: true});
+		Z.hasMany(D, {foreignKey: 'z_id'});
+	});
+});
