@@ -147,10 +147,16 @@ class MoldyMeat {
 		const qi = this.sequelize.getQueryInterface();
 
 		try {
+			for (const [tableName, fieldName] of removeColumns) {
+				console.log(`Drop column ${tableName}(${fieldName})`);
+				await qi.removeColumn(tableName, fieldName, {transaction: t});
+			}
+
 			for (const tableName of dropTables) {
 				console.log(`Drop table ${tableName}`);
 				await qi.dropTable(tableName, {transaction: t});
 			}
+
 			for (const [tableName, atts] of createTables) {
 				console.log(`Create Table ${tableName}`, atts);
 				await qi.createTable(tableName, atts, {transaction: t});
@@ -166,14 +172,11 @@ class MoldyMeat {
 				await qi.changeColumn(tableName, fieldName, att, {transaction: t});
 			}
 
-			for (const [tableName, fieldName] of removeColumns) {
-				console.log(`Drop column ${tableName}(${fieldName})`);
-				await qi.removeColumn(tableName, fieldName, {transaction: t});
-			}
 			t.commit();
 			await this.saveSchemaState(models);
 		} catch (e) {
 			t.rollback();
+			throw e;
 		}
 
 	}
