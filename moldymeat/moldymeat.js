@@ -96,9 +96,6 @@ class MoldyMeat {
 		removeUndefined(models);
 
 		const changes = diff(migState, models);
-		await this.saveSchemaState(models);
-
-		const qi = this.sequelize.getQueryInterface();
 
 		const createTables = [];
 		const dropTables = [];
@@ -118,8 +115,7 @@ class MoldyMeat {
 			} else {
 				for (const [fieldName, _att] of Object.entries(v)) {
 					const att = this._hydrateAttribute(_att);
-					console.log(`Add Column ${tableName}(${fieldName})`, att);
-					await qi.addColumn(tableName, fieldName, att);
+					addColumns.push([tableName, fieldName, att]);
 				}
 			}
 		}
@@ -127,8 +123,7 @@ class MoldyMeat {
 		for (const [tableName, v] of Object.entries(changes['updated'])) {
 			for (const [fieldName, _att] of Object.entries(v)) {
 				const att = this._hydrateAttribute(_att);
-				console.log(`Alter column ${tableName}(${fieldName})`, att);
-				await qi.changeColumn(tableName, fieldName, att);
+				changeColumns.push([tableName, fieldName, att]);
 			}
 		}
 
@@ -138,29 +133,49 @@ class MoldyMeat {
 				dropTables.push(tableName);
 			} else {
 				for (const [fieldName, options] of Object.entries(v)) {
-					console.log(`Drop column ${tableName}(${fieldName})`);
-					await qi.removeColumn(tableName, fieldName);
+					removeColumns.push([tableName, fieldName]);
 				}
 			}
 		}
 
-		// TODO: sort createTables and dropTables
-
-		console.log("BEFORE", createTables, dropTables);
 		let topoTables = topoModels.map(x => x.getTableName());
 		topoTables.reverse();
 		createTables.sort((a, b) => topoTables.indexOf(a[0]) - topoTables.indexOf(b[0]));
 		dropTables.sort((a, b) => topoTables.indexOf(a) - topoTables.indexOf(b));
-		console.log("AFTER", createTables, dropTables);
 
-		for (const tableName of dropTables) {
-			console.log(`Drop table ${tableName}`);
-			await qi.dropTable(tableName);
+		const t = await this.sequelize.transaction();
+		const qi = this.sequelize.getQueryInterface();
+
+		try {
+			for (const tableName of dropTables) {
+				console.log(`Drop table ${tableName}`);
+				await qi.dropTable(tableName, {transaction: t});
+			}
+			for (const [tableName, atts] of createTables) {
+				console.log(`Create Table ${tableName}`, atts);
+				await qi.createTable(tableName, atts, {transaction: t});
+			}
+
+			for (const [tableName, fieldName, att] of addColumns) {
+				console.log(`Add Column ${tableName}(${fieldName})`, att);
+				await qi.addColumn(tableName, fieldName, att, {transaction: t});
+			}
+
+			for (const [tableName, fieldName, att] of changeColumns) {
+				console.log(`Alter column ${tableName}(${fieldName})`, att);
+				await qi.changeColumn(tableName, fieldName, att, {transaction: t});
+			}
+
+			for (const [tableName, fieldName] of removeColumns) {
+				console.log(`Drop column ${tableName}(${fieldName})`);
+				await qi.removeColumn(tableName, fieldName, {transaction: t});
+			}
+			t.commit();
+			await this.saveSchemaState(models);
+		} catch (e) {
+			t.rollback();
 		}
-		for (const [tableName, atts] of createTables) {
-			console.log(`Create Table ${tableName}`, atts);
-			await qi.createTable(tableName, atts);
-		}
+
 	}
 
 	async rollback(howMany) {
