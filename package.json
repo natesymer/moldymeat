@@ -1,6 +1,6 @@
 {
   "name": "moldymeat",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Database-model schema syncing",
   "main": "moldymeat/index.js",
   "scripts": {

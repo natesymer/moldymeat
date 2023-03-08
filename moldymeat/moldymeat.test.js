@@ -110,3 +110,9 @@ test('can add a foreign key relationship', async () => {
 		Z.hasMany(D, {foreignKey: 'z_id'});
 	});
 });
+
+test('can handle custom primary keys', async () => {
+	await updateSchemaTo(async seq => {
+		const User = seq.define('User', {user_id: {type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true}});
+	});
+});

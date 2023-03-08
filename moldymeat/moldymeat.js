@@ -97,6 +97,8 @@ class MoldyMeat {
 
 		const changes = diff(migState, models);
 
+		const qi = this.sequelize.getQueryInterface();
+
 		const createTables = [];
 		const dropTables = [];
 		const addColumns = [];
@@ -104,8 +106,7 @@ class MoldyMeat {
 		const removeColumns = [];
 
 		for (const [tableName, v] of Object.entries(changes['added'])) {
-			// TODO: figure out better isCreate test
-			const isCreate = Object.keys(v).includes('id');
+			const isCreate = !(await qi.tableExists(tableName));
 			if (isCreate) {
 				let atts = {};
 				for (const [k, att] of Object.entries(v)) {
@@ -128,7 +129,7 @@ class MoldyMeat {
 		}
 
 		for (const [tableName, v] of Object.entries(changes['deleted'])) {
-			const isDrop = !Object.keys(models).includes(tableName); //Object.keys(v).includes('id');
+			const isDrop = !Object.keys(models).includes(tableName);
 			if (isDrop) {
 				dropTables.push(tableName);
 			} else {
@@ -144,7 +145,6 @@ class MoldyMeat {
 		dropTables.sort((a, b) => topoTables.indexOf(a) - topoTables.indexOf(b));
 
 		const t = await this.sequelize.transaction();
-		const qi = this.sequelize.getQueryInterface();
 
 		try {
 			for (const [tableName, fieldName] of removeColumns) {
