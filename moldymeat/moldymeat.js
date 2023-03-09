@@ -4,6 +4,12 @@ const diff = require('./diff');
 const { removeUndefined, objectMap } = require('./util');
 
 /**
+ * TODO:
+ * - hints
+ * - Indeces (https://sequelize.org/api/v6/class/src/model.js~model#static-method-init)
+ */
+
+/**
  * The main moldymeat class.
  * @property {Sequelize} sequelize The underlying Sequelize instance.
  * @property {Sequelize.Model} stateModel The model for schema updates
@@ -68,9 +74,9 @@ class MoldyMeat {
 	 * @async
 	 * @private
 	 */
-	async saveSchemaState(state) {
+	async saveSchemaState(state, transaction=null) {
 		this._ensureInitialized();
-		await this.stateModel.create({json: JSON.stringify(state)});
+		await this.stateModel.create({json: JSON.stringify(state)}, transaction ? {transaction} : {});
 	}
 
 	/**
@@ -78,7 +84,7 @@ class MoldyMeat {
 	 * models in `this.sequelize.models`
 	 * @async
 	 */
-	async updateSchema() {
+	async updateSchema(forward=true) {
 		this._ensureInitialized();
 		const migState = await this.loadSchemaState();
 	
@@ -95,46 +101,106 @@ class MoldyMeat {
 
 		removeUndefined(models);
 
-		const changes = diff(migState, models);
+		const {added, updated, deleted} = forward ? diff(migState, models) : diff(models, migState);
 
-		const qi = this.sequelize.getQueryInterface();
+		console.log({added, updated, deleted});
+
+		if (Object.keys(added).length === 0 && Object.keys(updated).length === 0 && Object.keys(deleted).length === 0) {
+			return false;
+		}
+
+		/* build database commands to implement the change */
 
 		const createTables = [];
 		const dropTables = [];
 		const addColumns = [];
 		const changeColumns = [];
 		const removeColumns = [];
+		const renameColumns = [];
+		const renameSerialSequences = [];
 
-		for (const [tableName, v] of Object.entries(changes['added'])) {
-			const isCreate = !(await qi.tableExists(tableName));
-			if (isCreate) {
-				let atts = {};
-				for (const [k, att] of Object.entries(v)) {
-					atts[k] = this._hydrateAttribute(att);
-				}
-				createTables.push([tableName, atts]);
-			} else {
-				for (const [fieldName, _att] of Object.entries(v)) {
-					const att = this._hydrateAttribute(_att);
-					addColumns.push([tableName, fieldName, att]);
+		// Rewrite drop/add of primary key fields to updates
+		for (const [tableName, v] of Object.entries(deleted)) {
+			const isDropTable = !Object.keys(models).includes(tableName);
+			if (isDropTable) continue;
+
+//			const model = Object.values(this.sequelize.models).find(x => x.getTableName() === tableName);
+			const fieldsToDelete = Object.keys(v);
+			for (const deleteFieldName of fieldsToDelete) {
+				const deleteField = this._hydrateAttribute(migState[tableName][deleteFieldName]);
+				if (deleteField.primaryKey) {
+					for (const addFieldName of Object.keys(added[tableName])) {
+						const isAddColumn = !Object.keys(migState[tableName]).includes(addFieldName);
+						if (!isAddColumn) continue;
+
+						const addField = this._hydrateAttribute(models[tableName][addFieldName]);//this._hydrateAttribute(added[tableName][addFieldName]);
+						if (addField.primaryKey) {
+							const newField = {
+								// satisfy postgres constraints
+								// https://www.postgresql.org/docs/13/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS
+								primaryKey: true,
+								allowNull: false,
+								unique: true,
+				
+								// autoIncrement breaks this
+								autoIncrement: true,//addField.autoIncrement,	
+								field: addField.field,
+								fieldName: addField.fieldName,
+								type: addField.type
+							};
+							console.log("Comparing shit", {tableName, addField, deleteField, newField});
+							if (deleteField.type.key === addField.type.key) {
+								renameColumns.push({tableName, deleteFieldName, addFieldName, addField: newField});
+								delete deleted[tableName][deleteFieldName];
+								delete added[tableName][addFieldName];
+								break;
+							}
+						}
+					}
+
 				}
 			}
 		}
 
-		for (const [tableName, v] of Object.entries(changes['updated'])) {
+		for (const [tableName, v] of Object.entries(added)) {
+			const isCreate = !Object.keys(migState).includes(tableName);
+			if (isCreate) {
+				const atts = objectMap(v, ([fieldName, att]) => [fieldName, this._hydrateAttribute(att)]);
+				createTables.push([tableName, atts]);
+			} else {
+				for (const [fieldName, _att] of Object.entries(v)) {
+					const isAddColumn = !Object.keys(migState[tableName]).includes(fieldName);
+					const att = this._hydrateAttribute(models[tableName][fieldName]);
+					if (isAddColumn) {
+						addColumns.push([tableName, fieldName, att]);
+					} else {
+						changeColumns.push([tableName, fieldName, att]);
+					}
+				}
+			}
+		}
+
+		for (const [tableName, v] of Object.entries(updated)) {
 			for (const [fieldName, _att] of Object.entries(v)) {
-				const att = this._hydrateAttribute(_att);
+				const att = this._hydrateAttribute(models[tableName][fieldName]);//_att);
 				changeColumns.push([tableName, fieldName, att]);
 			}
 		}
 
-		for (const [tableName, v] of Object.entries(changes['deleted'])) {
-			const isDrop = !Object.keys(models).includes(tableName);
-			if (isDrop) {
+		for (const [tableName, v] of Object.entries(deleted)) {
+			const isDropTable = !Object.keys(models).includes(tableName);
+			if (isDropTable) {
 				dropTables.push(tableName);
 			} else {
-				for (const [fieldName, options] of Object.entries(v)) {
-					removeColumns.push([tableName, fieldName]);
+				for (const [fieldName, att] of Object.entries(v)) {
+					if (att === undefined) {
+						removeColumns.push([tableName, fieldName]);
+					} else {
+						let currentAtt = this._hydrateAttribute(migState[tableName][fieldName]);
+						let newAtt = removeUndefined({...currentAtt, ...att});
+						console.log(newAtt);
+						changeColumns.push([tableName, fieldName, newAtt]);
+					}
 				}
 			}
 		}
@@ -144,6 +210,72 @@ class MoldyMeat {
 		createTables.sort((a, b) => topoTables.indexOf(a[0]) - topoTables.indexOf(b[0]));
 		dropTables.sort((a, b) => topoTables.indexOf(a) - topoTables.indexOf(b));
 
+		const qi = this.sequelize.getQueryInterface();
+
+// monkey patch sequelize because it uses serial 
+qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
+    const query = subQuery => `ALTER TABLE ${this.quoteTable(tableName)} ALTER COLUMN ${subQuery};`;
+    const sql = [];
+    for (const attributeName in attributes) {
+      let definition = this.dataTypeMapping(tableName, attributeName, attributes[attributeName]);
+      let attrSql = '';
+
+	// START: expand SERIAL back into its real definition.
+      if (definition.includes('SERIAL')) {
+		if (definition.includes('BIGSERIAL')) {
+			definition = definition.replace('BIGSERIAL', 'BIGINT');
+		} else if (definition.includes('SMALLSERIAL')) {
+			definition = definition.replace("SMALLSERIAL", 'SMALLINT');
+		} else {
+			definition = definition.replace('SERIAL', 'INTEGER');
+		}
+		definition += ` DEFAULT nextval(format('%I', '${tableName}_${attributeName}_seq'))`;
+		if (attributes[attributeName].includes('NOT NULL')) {
+			definition += ' NOT NULL';
+		}
+		console.log("HERE", definition);
+      }
+	// END: expand SERIAL back into its real definition
+
+      if (definition.includes('NOT NULL')) {
+        attrSql += query(`${this.quoteIdentifier(attributeName)} SET NOT NULL`);
+
+        definition = definition.replace('NOT NULL', '').trim();
+      } else if (!definition.includes('REFERENCES')) {
+        attrSql += query(`${this.quoteIdentifier(attributeName)} DROP NOT NULL`);
+      }
+
+      if (definition.includes('DEFAULT')) {
+        attrSql += query(`${this.quoteIdentifier(attributeName)} SET DEFAULT ${definition.match(/DEFAULT ([^;]+)/)[1]}`);
+
+        definition = definition.replace(/(DEFAULT[^;]+)/, '').trim();
+      } else if (!definition.includes('REFERENCES')) {
+        attrSql += query(`${this.quoteIdentifier(attributeName)} DROP DEFAULT`);
+      }
+
+      if (attributes[attributeName].startsWith('ENUM(')) {
+        attrSql += this.pgEnum(tableName, attributeName, attributes[attributeName]);
+        definition = definition.replace(/^ENUM\(.+\)/, this.pgEnumName(tableName, attributeName, { schema: false }));
+        definition += ` USING (${this.quoteIdentifier(attributeName)}::${this.pgEnumName(tableName, attributeName)})`;
+      }
+
+      if (/UNIQUE;*$/.test(definition)) {
+        definition = definition.replace(/UNIQUE;*$/, '');
+        attrSql += query(`ADD UNIQUE (${this.quoteIdentifier(attributeName)})`).replace('ALTER COLUMN', '');
+      }
+
+      if (definition.includes('REFERENCES')) {
+        definition = definition.replace(/.+?(?=REFERENCES)/, '');
+        attrSql += query(`ADD FOREIGN KEY (${this.quoteIdentifier(attributeName)}) ${definition}`).replace('ALTER COLUMN', '');
+      } else {
+        attrSql += query(`${this.quoteIdentifier(attributeName)} TYPE ${definition}`);
+      }
+
+      sql.push(attrSql);
+    }
+
+    return sql.join('');
+  }
 		const t = await this.sequelize.transaction();
 
 		try {
@@ -162,6 +294,27 @@ class MoldyMeat {
 				await qi.createTable(tableName, atts, {transaction: t});
 			}
 
+			for (const {tableName, deleteFieldName, addFieldName, addField} of renameColumns) {
+				console.log(`Rename Column ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})`, addField);
+				await qi.renameColumn(tableName, deleteFieldName, addFieldName, {transaction: t});
+				if (addField.autoIncrement) {
+					const oldName = `"${tableName}_${deleteFieldName}_seq"`;
+					const newName = `"${tableName}_${addFieldName}_seq"`;
+					await this.sequelize.query(`ALTER SEQUENCE IF EXISTS ${oldName} RENAME TO ${newName};`, {transaction: t});
+					await this.sequelize.query(`CREATE SEQUENCE IF NOT EXISTS ${newName} AS integer;`, {transaction: t});
+					await this.sequelize.query(`ALTER SEQUENCE IF EXISTS ${newName} OWNED BY "${tableName}"."${addFieldName}";`, {transaction: t});
+				}
+
+				const query = qi.queryGenerator.attributesToSQL({
+					[addFieldName]: qi.normalizeAttribute(addField)
+				}, {context: "changeColumn", table: tableName});
+				const def = qi.queryGenerator.dataTypeMapping(tableName, addFieldName, query[addFieldName]);
+				const sql = qi.queryGenerator.changeColumnQuery(tableName, query);
+				console.log("INTERMEDIATES", query, def, '\n\n', sql);
+
+				await qi.changeColumn(tableName, addFieldName, addField, {transaction: t});
+			}
+
 			for (const [tableName, fieldName, att] of addColumns) {
 				console.log(`Add Column ${tableName}(${fieldName})`, att);
 				await qi.addColumn(tableName, fieldName, att, {transaction: t});
@@ -172,18 +325,22 @@ class MoldyMeat {
 				await qi.changeColumn(tableName, fieldName, att, {transaction: t});
 			}
 
+			await this.saveSchemaState(models, t);
 			t.commit();
-			await this.saveSchemaState(models);
 		} catch (e) {
 			t.rollback();
+			console.log(e);
 			throw e;
 		}
-
+		return true;
 	}
 
-	async rollback(howMany) {
-		this._ensureInitialized();
-		// TODO: implement
+	async backwards() {
+		this.updateSchema(false);
+	}
+
+	async forwards() {
+		this.updateSchema(true);
 	}
 
 	/**

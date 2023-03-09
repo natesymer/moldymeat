@@ -45,12 +45,17 @@ async function initSequelize() {
 	return s;
 }
 
-async function updateSchemaTo(fn) {
+async function withSchema(fn) {
 	const seq = await initSequelize();
 	await fn(seq);
 	const mm = new MoldyMeat({sequelize: seq});
 	await mm.initialize();
 	await mm.updateSchema();
+	return seq;
+}
+
+async function updateSchemaTo(fn) {
+	const seq = await withSchema(fn);
 	await seq.close();
 }
 
@@ -116,3 +121,38 @@ test('can handle custom primary keys', async () => {
 		const User = seq.define('User', {user_id: {type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true}});
 	});
 });
+
+test('can sync a new field on a model', async () => {
+	await updateSchemaTo(async seq => {
+		const U = seq.define('U', {name: {type: DataTypes.TEXT, allowNull: false}}, {paranoid: true});
+	});
+
+	await updateSchemaTo(async seq => {
+		const U = seq.define('U', {name: {type: DataTypes.TEXT}}, {paranoid: true});
+	});
+
+	await updateSchemaTo(async seq => {
+		const U = seq.define('U', {name: {type: DataTypes.TEXT, allowNull: true}}, {paranoid: true});
+	});
+});
+
+test('can handle renaming primary keys', async () => {
+	const ID_VALUE = 420;
+	const seq = await withSchema(async seq => {
+		const User = seq.define('User', {user_id: {type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true}});
+	});
+
+	await seq.models.User.create({user_id: ID_VALUE});
+	await seq.close();
+	
+	const seq2 = await withSchema(async seq => {
+		const User = seq.define('User', {}); // use the default, built-in primary key
+	});
+
+	let up = seq2.models.User.findOne({where: {id: ID_VALUE}})
+	await expect(up).resolves.not.toThrowError();
+	let user = await up;
+	expect(user.id).toEqual(ID_VALUE);
+	await seq2.close();
+});
+
