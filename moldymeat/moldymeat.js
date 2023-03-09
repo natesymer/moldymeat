@@ -103,8 +103,6 @@ class MoldyMeat {
 
 		const {added, updated, deleted} = forward ? diff(migState, models) : diff(models, migState);
 
-		console.log({added, updated, deleted});
-
 		if (Object.keys(added).length === 0 && Object.keys(updated).length === 0 && Object.keys(deleted).length === 0) {
 			return false;
 		}
@@ -143,12 +141,12 @@ class MoldyMeat {
 								unique: true,
 				
 								// autoIncrement breaks this
-								autoIncrement: true,//addField.autoIncrement,	
+								autoIncrement: addField.autoIncrement,	
 								field: addField.field,
 								fieldName: addField.fieldName,
 								type: addField.type
 							};
-							console.log("Comparing shit", {tableName, addField, deleteField, newField});
+							
 							if (deleteField.type.key === addField.type.key) {
 								renameColumns.push({tableName, deleteFieldName, addFieldName, addField: newField});
 								delete deleted[tableName][deleteFieldName];
@@ -198,7 +196,6 @@ class MoldyMeat {
 					} else {
 						let currentAtt = this._hydrateAttribute(migState[tableName][fieldName]);
 						let newAtt = removeUndefined({...currentAtt, ...att});
-						console.log(newAtt);
 						changeColumns.push([tableName, fieldName, newAtt]);
 					}
 				}
@@ -233,7 +230,6 @@ qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
 		if (attributes[attributeName].includes('NOT NULL')) {
 			definition += ' NOT NULL';
 		}
-		console.log("HERE", definition);
       }
 	// END: expand SERIAL back into its real definition
 
@@ -297,7 +293,7 @@ qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
 			for (const {tableName, deleteFieldName, addFieldName, addField} of renameColumns) {
 				console.log(`Rename Column ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})`, addField);
 				await qi.renameColumn(tableName, deleteFieldName, addFieldName, {transaction: t});
-				if (addField.autoIncrement) {
+				if (addField.autoIncrement) { // TODO: check to make sure the type is also an integer
 					const oldName = `"${tableName}_${deleteFieldName}_seq"`;
 					const newName = `"${tableName}_${addFieldName}_seq"`;
 					await this.sequelize.query(`ALTER SEQUENCE IF EXISTS ${oldName} RENAME TO ${newName};`, {transaction: t});
