@@ -18,7 +18,6 @@ elif [[ $EUID = 0 ]]; then
 fi
 
 $PFX docker run \
-  -v $(pwd)/.pgdata:/var/lib/postgresql/data \
   -e POSTGRES_PASSWORD=$PASSWORD \
   -p 5432:5432 \
   postgres

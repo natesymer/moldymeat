@@ -55,8 +55,7 @@ async function withSchema(fn) {
 }
 
 async function updateSchemaTo(fn) {
-	const seq = await withSchema(fn);
-	await seq.close();
+	await withSchema(fn).then(x => x.close());
 }
 
 beforeEach(async () => {
@@ -70,7 +69,6 @@ test('can sync empty database with models', async () => {
 
 		A.hasMany(U, {foreignKey: 'a_id'});
 	});
-	expect(1).toEqual(1);
 });
 
 

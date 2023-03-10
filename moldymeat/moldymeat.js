@@ -91,7 +91,11 @@ class MoldyMeat {
 		const models = {};
 
 		// topoModels = [mostDependedUponModel, ..., least depended upon model]	
-		const topoModels = this.sequelize.modelManager.getModelsTopoSortedByForeignKey();	
+		const topoModels = this.sequelize.modelManager.getModelsTopoSortedByForeignKey();
+		if (!topoModels) {
+			throw new Error("Your models have a circular association.");
+		}
+	
 		const stateTableName = this.stateModel.getTableName();
 		for (const v of topoModels) {
 			const tableName = v.getTableName();
