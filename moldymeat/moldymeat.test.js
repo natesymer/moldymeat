@@ -156,3 +156,8 @@ test('can handle renaming primary keys', async () => {
 	await seq2.close();
 });
 
+test('can create TSVector columns', async () => {
+	await updateSchemaTo(async seq => {
+		const Foo = seq.define('Foo', {asdf: DataTypes.TSVECTOR});
+	});
+});

@@ -364,7 +364,10 @@ qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
 		const {type: _type, ...att} = _att;
 		const {typekey, ...type} = _type;
 
-		return {type: {...DataTypes[typekey], ...type}, ...att};
+		//return {type: {...DataTypes[typekey], ...type}, ...att};
+
+		let newType = DataTypes[typekey](type.options);
+		return {type: newType, ...att};
 	}
 }
 
