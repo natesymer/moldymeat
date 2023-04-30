@@ -1,7 +1,10 @@
 const { Sequelize, DataTypes } = require('sequelize');
+const fs = require('fs/promises');
+const {exists} = require('fs');
 
+const hintsfileSchema = require('./hintsfileSchema');
 const diff = require('./diff');
-const { removeUndefined, objectMap } = require('./util');
+const { removeUndefined, objectMap, boolPrompt } = require('./util');
 
 /**
  * TODO:
@@ -19,10 +22,13 @@ class MoldyMeat {
 	 * Create a MoldyMeat instance.
 	 * @param {object} options
 	 * @param {Sequelize} options.sequelize The sequelize instance to use.
+	 * @param {string} options.hintsFile The file path to the hints file
 	 */
-	constructor({sequelize} = {}) {
+	constructor({sequelize, hintsFile="database_hints.json"} = {}) {
 		this.sequelize = sequelize;
 		this.isInitialized = false;
+		this.hintsFile = hintsFile;
+		this.hints = [];
 	}
 
 	/**
@@ -34,6 +40,12 @@ class MoldyMeat {
 		if (!this.sequelize) {
 			// TODO: throw error
 		}
+
+		if (exists(this.hintsFile)) {
+			const hintsJson = async fs.readFile(this.hintsFile);
+			this.hints = await hintsfileSchema.validate(JSON.parse(hintsJson));
+		}
+
 		this.stateModel = this.sequelize.define("MoldyMeatState", {
 			json: DataTypes.TEXT
 		});
@@ -82,20 +94,26 @@ class MoldyMeat {
 	/**
 	 * Updates the schema of the database (to which sequelize is connected) to match the
 	 * models in `this.sequelize.models`
+	 * @param {object} options
+	 * @param {bool} options.forward
+	 * @param {bool} options.generateHints
+	 * @param {bool} options.useHints
 	 * @async
 	 */
-	async updateSchema(forward=true) {
+	async updateSchema({forward=true, generateHints=false, useHints=true}) {
 		this._ensureInitialized();
 		const migState = await this.loadSchemaState();
-	
-		const models = {};
 
+		// Load the models sorted by dependency, so that we can create tables without
+		// causing postgres to error at us
 		// topoModels = [mostDependedUponModel, ..., least depended upon model]	
 		const topoModels = this.sequelize.modelManager.getModelsTopoSortedByForeignKey();
 		if (!topoModels) {
 			throw new Error("Your models have a circular association.");
 		}
-	
+
+		// Load the models into `models`: postgres table name => "flattened" sequelize model definition
+		const models = {};
 		const stateTableName = this.stateModel.getTableName();
 		for (const v of topoModels) {
 			const tableName = v.getTableName();
@@ -103,12 +121,27 @@ class MoldyMeat {
 			models[tableName] = objectMap(v.getAttributes(), ([k, v]) => [k, this._flattenAttribute(v)]);
 		}
 
-		removeUndefined(models);
+		removeUndefined(models); // because JSON.stringify errors on undefined
 
+		// Run the diff
 		const {added, updated, deleted} = forward ? diff(migState, models) : diff(models, migState);
 
 		if (Object.keys(added).length === 0 && Object.keys(updated).length === 0 && Object.keys(deleted).length === 0) {
 			return false;
+		}
+
+		// Filter out hints that were already applied
+		const newHints = useHints ? this.hints : [];
+
+		const hintedRenames = {}; // {table name => { old field name => new field name }}
+		for (const {type, body} of newHints) {
+			if (type === 'renameColumn') {
+				const {toField, fromField, table} = body;
+				const t = forward ? toField : fromField;
+				const f = forward ? fromField : toField;
+				hintedRenames[table] = hintedRenames[table] ?? {};
+				hintedRenames[table][f] = t;
+			}
 		}
 
 		/* build database commands to implement the change */
@@ -126,18 +159,37 @@ class MoldyMeat {
 			const isDropTable = !Object.keys(models).includes(tableName);
 			if (isDropTable) continue;
 
-//			const model = Object.values(this.sequelize.models).find(x => x.getTableName() === tableName);
-			const fieldsToDelete = Object.keys(v);
-			for (const deleteFieldName of fieldsToDelete) {
-				const deleteField = this._hydrateAttribute(migState[tableName][deleteFieldName]);
-				if (deleteField.primaryKey) {
-					for (const addFieldName of Object.keys(added[tableName])) {
-						const isAddColumn = !Object.keys(migState[tableName]).includes(addFieldName);
-						if (!isAddColumn) continue;
+			const tableHintedRenames = hintedRenames[tableName];
 
-						const addField = this._hydrateAttribute(models[tableName][addFieldName]);//this._hydrateAttribute(added[tableName][addFieldName]);
-						if (addField.primaryKey) {
-							const newField = {
+			// Look for primary key renames
+			for (const deleteFieldName of Object.keys(v)) {
+				if (deleteFieldName in hintedRenames[tableName]) {
+					const renamedTo = hintedRenames[tableName][deleteFieldName];
+					if (renamedTo in added[tableName]) {
+						const newField = this._hydrateAttribute(models[tableName][renamedTo]);
+						renameColumns.push({tableName, deleteFieldName, addFieldName: renamedTo, addField: newField});
+						delete deleted[tableName][deleteFieldName];
+						delete added[tableName][renamedTo];
+						continue;
+					}
+				}
+
+				const deleteField = this._hydrateAttribute(migState[tableName][deleteFieldName]);
+
+				for (const addFieldName of Object.keys(added[tableName])) {
+					const isAddColumn = !Object.keys(migState[tableName]).includes(addFieldName);
+					if (!isAddColumn) continue;
+
+					let addField = this._hydrateAttribute(models[tableName][addFieldName]);
+
+					const isSameType = deleteField.type.key === addField.type.key;
+					const arePKs = deleteField.primaryKey && addField.primaryKey;
+
+					if (isSameType) {
+						let shouldRename = false;
+						if (arePKs) {
+							// automatically rename
+							addField = {
 								// satisfy postgres constraints
 								// https://www.postgresql.org/docs/13/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS
 								primaryKey: true,
@@ -150,16 +202,21 @@ class MoldyMeat {
 								fieldName: addField.fieldName,
 								type: addField.type
 							};
-							
-							if (deleteField.type.key === addField.type.key) {
-								renameColumns.push({tableName, deleteFieldName, addFieldName, addField: newField});
-								delete deleted[tableName][deleteFieldName];
-								delete added[tableName][addFieldName];
-								break;
+							shouldRename = true;
+						} else {
+							shouldRename = boolPrompt(`Did you rename ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})?`);
+							if (shouldRename) {
+								// TODO: create hint
 							}
 						}
-					}
 
+						if (shouldRename) {
+							renameColumns.push({tableName, deleteFieldName, addFieldName, addField});
+							delete deleted[tableName][deleteFieldName];
+							delete added[tableName][addFieldName];
+							break;
+						}
+					}
 				}
 			}
 		}
