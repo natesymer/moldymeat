@@ -41,17 +41,30 @@ class MoldyMeat {
 			// TODO: throw error
 		}
 
-		if (exists(this.hintsFile)) {
-			const hintsJson = async fs.readFile(this.hintsFile);
-			this.hints = await hintsfileSchema.validate(JSON.parse(hintsJson));
-		}
-
 		this.stateModel = this.sequelize.define("MoldyMeatState", {
 			json: DataTypes.TEXT
 		});
 		await this.stateModel.sync(); // yes...
 		this.isInitialized = true;
 		return this;
+	}
+
+	async _loadHints(since = null) {
+		if (exists(this.hintsFile)) {
+			const hintsJson = await fs.readFile(this.hintsFile);
+			let hs = await hintsfileSchema.validate(JSON.parse(hintsJson));
+			if (since) return hs.filter(x => (x.createdAt - since) > 0);
+			// TODO: sort it by createdAt
+			return hs;
+		}
+		return [];
+	}
+
+	async _saveHints(_hs, _d = null) {
+		let createdAt = _d ?? new Date();
+		let priors = await this._loadHints();
+		let hs = [...priors, ..._hs.map(x => ({...x, createdAt}));
+		await fs.writeFile(this.hintsFile, JSON.stringify(hs));
 	}
 
 	/**
@@ -131,10 +144,11 @@ class MoldyMeat {
 		}
 
 		// Filter out hints that were already applied
-		const newHints = useHints ? this.hints : [];
+		// TODO: actually filter `this.hints`
+		const hints = useHints ? await this._loadHints(migState.createdAt) : [];
 
 		const hintedRenames = {}; // {table name => { old field name => new field name }}
-		for (const {type, body} of newHints) {
+		for (const {type, body} of hints) {
 			if (type === 'renameColumn') {
 				const {toField, fromField, table} = body;
 				const t = forward ? toField : fromField;
@@ -154,7 +168,10 @@ class MoldyMeat {
 		const renameColumns = [];
 		const renameSerialSequences = [];
 
+		const newHints = [];
+
 		// Rewrite drop/add of primary key fields to updates
+		// based on primary key status, hints, and developer input
 		for (const [tableName, v] of Object.entries(deleted)) {
 			const isDropTable = !Object.keys(models).includes(tableName);
 			if (isDropTable) continue;
@@ -206,7 +223,14 @@ class MoldyMeat {
 						} else {
 							shouldRename = boolPrompt(`Did you rename ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})?`);
 							if (shouldRename) {
-								// TODO: create hint
+								newHints.push({
+									type: 'renameColumn',
+									body: {
+										fromField: deleteFieldName,
+										toField: addFieldName,
+										table: tableName
+									}
+								});
 							}
 						}
 
@@ -335,6 +359,8 @@ qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
   }
 		const t = await this.sequelize.transaction();
 
+		let hintDate = new Date();
+
 		try {
 			for (const [tableName, fieldName] of removeColumns) {
 				console.log(`Drop column ${tableName}(${fieldName})`);
@@ -389,6 +415,9 @@ qi.queryGenerator.changeColumnQuery = function(tableName, attributes) {
 			console.log(e);
 			throw e;
 		}
+
+		await this._saveHints(newHints, hintDate);
+		
 		return true;
 	}
 
