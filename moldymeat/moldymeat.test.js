@@ -2,21 +2,40 @@ const { Sequelize, DataTypes } = require('sequelize');
 const MoldyMeat = require('./moldymeat');
 const { Client } = require("pg");
 
+const PostgresServer = require("./PostgresServer");
+
 const dbSettings = {
-	database: 'testme1234iiii8',
+	database: 'postgres',
 	username: 'postgres',
-	password: 'password',
+	password: 'postgres',
 	host: 'localhost',
-}
+	port: 4200
+};
+
+const sleep = time => new Promise(res => setTimeout(res, time, "done sleeping"));
 
 async function ensureDb(dropDb = false) {
-	const client = new Client({
-		user: dbSettings.username,
-		password: dbSettings.password,
-		host: dbSettings.host
-	});
-	await client.connect();
+	let client = null
+	while (true) {
+		console.log("Trying a connection");
+		try {
+			client = new Client({
+				user: dbSettings.username,
+				password: dbSettings.password,
+				host: dbSettings.host,
+				port: dbSettings.port
+			});
 
+			await client.connect();
+			break;
+		} catch (e) {
+			await sleep(1000);
+			continue;
+		}
+	}
+
+	console.log("connected.");
+	
 	try {
 		if (dropDb) {
 			console.log("Clearing database...");
@@ -24,8 +43,11 @@ async function ensureDb(dropDb = false) {
 		}
 		console.log("Creating database...");
 		await client.query(`CREATE DATABASE "${dbSettings.database}";`);
-	} catch (err) {};
-	await client.end();
+	} catch (err) {
+
+	} finally {
+		await client.end();
+	}
 }
 
 async function initSequelize() {
@@ -58,9 +80,18 @@ async function updateSchemaTo(fn) {
 	await withSchema(fn).then(x => x.close());
 }
 
-beforeEach(async () => {
-	return await ensureDb(true);
+let postgresServer = new PostgresServer(dbSettings);
+
+beforeAll(() => {
+	return postgresServer.start().then(() => console.log('asd') || ensureDb(true));
 });
+
+
+afterAll(() => {
+	return postgresServer.shutdown();
+});
+
+beforeEach(() => ensureDb(true));
 
 test('can sync empty database with models', async () => {
 	await updateSchemaTo(async seq => {

@@ -5,9 +5,7 @@
   "main": "moldymeat/index.js",
   "scripts": {
     "test": "jest",
-    "docs": "jsdoc2md  moldymeat/**/*.js* > docs.md",
-    "db": "scripts/run-postgres.sh",
-    "local": "sh -c \"(trap 'kill 0' SIGINT; (npm run db) & (npm run web))\""
+    "docs": "jsdoc2md moldymeat/**/*.js* > docs.md"
   },
   "author": "Nate Symer <nate@symer.io>",
   "license": "MIT",
@@ -21,6 +19,8 @@
   "devDependencies": {
     "jest": "^29.4.3",
     "jsdoc": "^4.0.2",
-    "jsdoc-to-markdown": "^8.0.0"
+    "jsdoc-to-markdown": "^8.0.0",
+    "node-docker-api": "^1.1.22",
+    "wait-port": "^1.0.4"
   }
 }
