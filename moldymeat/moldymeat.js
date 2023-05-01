@@ -1,6 +1,6 @@
 const { Sequelize, DataTypes } = require('sequelize');
 const fs = require('fs/promises');
-const {exists} = require('fs');
+const {existsSync: exists} = require('fs');
 
 const patchPostgresQueryGenerator = require('./patchPostgresQueryGenerator');
 const hintsfileSchema = require('./hintsfileSchema');
@@ -180,7 +180,7 @@ class MoldyMeat {
 
 			// Look for primary key renames
 			for (const deleteFieldName of Object.keys(v)) {
-				if (deleteFieldName in hintedRenames[tableName]) {
+				if (deleteFieldName in (hintedRenames[tableName] ?? {})) {
 					const renamedTo = hintedRenames[tableName][deleteFieldName];
 					if (renamedTo in added[tableName]) {
 						const newField = this._hydrateAttribute(models[tableName][renamedTo]);
@@ -193,7 +193,7 @@ class MoldyMeat {
 
 				const deleteField = this._hydrateAttribute(migState[tableName][deleteFieldName]);
 
-				for (const addFieldName of Object.keys(added[tableName])) {
+				for (const addFieldName of Object.keys(added[tableName] ?? {})) {
 					const isAddColumn = !Object.keys(migState[tableName]).includes(addFieldName);
 					if (!isAddColumn) continue;
 
