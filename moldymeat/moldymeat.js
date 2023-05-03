@@ -9,7 +9,6 @@ const { removeUndefined, objectMap, boolPrompt } = require('./util');
 
 /**
  * TODO:
- * - hints
  * - Indeces (https://sequelize.org/api/v6/class/src/model.js~model#static-method-init)
  */
 
@@ -24,11 +23,16 @@ class MoldyMeat {
 	 * @param {object} options
 	 * @param {Sequelize} options.sequelize The sequelize instance to use.
 	 * @param {string} options.hintsFile The file path to the hints file
+	 * @param {string} options.hitns Hints to use instead of loading them from a file.
 	 */
-	constructor({sequelize, hintsFile="database_hints.json"} = {}) {
+	constructor({sequelize, hintsFile="database_hints.json", hints = undefined} = {}) {
 		this.sequelize = sequelize;
 		this.isInitialized = false;
 		this.hintsFile = hintsFile;
+		if (hints !== undefined) {
+			this.hints = hints;
+			this.useMockHints = true;
+		}
 	}
 
 	/**
@@ -51,13 +55,20 @@ class MoldyMeat {
 	}
 
 	async _loadHints(since = null) {
+		if (this.useMockHints) {
+			let hs = [...this.hints];
+			hs.sort((a, b) => a.createdAt - b.createdAt);
+			return hs;
+		}
+
 		if (exists(this.hintsFile)) {
 			const hintsJson = await fs.readFile(this.hintsFile);
 			let hs = await hintsfileSchema.validate(JSON.parse(hintsJson));
 			if (since) return hs.filter(x => (x.createdAt - since) > 0);
-			// TODO: sort it by createdAt
+			hs.sort((a, b) => a.createdAt - b.createdAt);
 			return hs;
 		}
+
 		return [];
 	}
 
@@ -65,7 +76,12 @@ class MoldyMeat {
 		let createdAt = _d ?? new Date();
 		let priors = await this._loadHints();
 		let hs = [...priors, ..._hs.map(x => ({...x, createdAt}))];
-		await fs.writeFile(this.hintsFile, JSON.stringify(hs));
+		hs.sort((a, b) => a.createdAt - b.createdAt);
+		if (this.useMockHints) {
+			this.hints = hs;
+		} else {
+			await fs.writeFile(this.hintsFile, JSON.stringify(hs));
+		}
 	}
 
 	/**
@@ -76,7 +92,6 @@ class MoldyMeat {
 		if (!this.isInitialized) {
 			// TODO: Throw error
 		}
-
 	}
 
 	/**
@@ -105,6 +120,20 @@ class MoldyMeat {
 		await this.stateModel.create({json: JSON.stringify(state)}, transaction ? {transaction} : {});
 	}
 
+	/* TODO:
+		Clarify this:
+		1. When a column's type "changes", prompt the user. e.g.
+			First Run:
+				MyModel
+					foo: Int
+
+			Second Run:
+				MyModel
+					foo: String
+					fooBar: Int
+
+			What if the developer renamed `foo: Int` to `fooBar: Int`, and then added `foo: String`?
+	*/
 	/**
 	 * Updates the schema of the database (to which sequelize is connected) to match the
 	 * models in `this.sequelize.models`
@@ -180,6 +209,8 @@ class MoldyMeat {
 
 			// Look for primary key renames
 			for (const deleteFieldName of Object.keys(v)) {
+
+				// First try to use a hint
 				if (deleteFieldName in (hintedRenames[tableName] ?? {})) {
 					const renamedTo = hintedRenames[tableName][deleteFieldName];
 					if (renamedTo in added[tableName]) {
@@ -193,8 +224,9 @@ class MoldyMeat {
 
 				const deleteField = this._hydrateAttribute(migState[tableName][deleteFieldName]);
 
+				// If there's no hint, look for fields that could potentially be renames
 				for (const addFieldName of Object.keys(added[tableName] ?? {})) {
-					const isAddColumn = !Object.keys(migState[tableName]).includes(addFieldName);
+					const isAddColumn = !(addFieldName in migState[tableName])//Object.keys(migState[tableName]).includes(addFieldName);
 					if (!isAddColumn) continue;
 
 					let addField = this._hydrateAttribute(models[tableName][addFieldName]);
@@ -202,10 +234,13 @@ class MoldyMeat {
 					const isSameType = deleteField.type.key === addField.type.key;
 					const arePKs = deleteField.primaryKey && addField.primaryKey;
 
+					// fields that are the same type *could* be renames
 					if (isSameType) {
 						let shouldRename = false;
+						// Since all tables must contain necessarily 1
+						// primary key, if both fields are the primary key
+						// we can safely assume it was a rename.
 						if (arePKs) {
-							// automatically rename
 							addField = {
 								// satisfy postgres constraints
 								// https://www.postgresql.org/docs/13/ddl-constraints.html#DDL-CONSTRAINTS-PRIMARY-KEYS
@@ -221,7 +256,10 @@ class MoldyMeat {
 							};
 							shouldRename = true;
 						} else {
-							shouldRename = boolPrompt(`Did you rename ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})?`);
+							// Otherwise, we have to ask the developer so we can
+							// know for sure and generate a hint if necessary.
+							const q = `Did you rename ${tableName}(${deleteFieldName}) to ${tableName}(${addFieldName})?`;
+							shouldRename = await boolPrompt(q);
 							if (shouldRename) {
 								newHints.push({
 									type: 'renameColumn',

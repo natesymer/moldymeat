@@ -73,4 +73,3 @@ class PostgresServer {
 
 module.exports = PostgresServer;
 
-let x = new PostgresServer();

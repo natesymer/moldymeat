@@ -15,9 +15,9 @@ const dbSettings = {
 const sleep = time => new Promise(res => setTimeout(res, time, "done sleeping"));
 
 async function ensureDb(dropDb = false) {
+	console.log("Waiting for database connection");
 	let client = null
 	while (true) {
-		console.log("Trying a connection");
 		try {
 			client = new Client({
 				user: dbSettings.username,
@@ -67,12 +67,12 @@ async function initSequelize() {
 	return s;
 }
 
-async function withSchema(fn) {
+async function withSchema(fn, usArgs = {}) {
 	const seq = await initSequelize();
 	await fn(seq);
 	const mm = new MoldyMeat({sequelize: seq});
 	await mm.initialize();
-	await mm.updateSchema();
+	await mm.updateSchema(usArgs);
 	return seq;
 }
 
@@ -82,14 +82,8 @@ async function updateSchemaTo(fn) {
 
 let postgresServer = new PostgresServer(dbSettings);
 
-beforeAll(() => {
-	return postgresServer.start().then(() => console.log('asd') || ensureDb(true));
-});
-
-
-afterAll(() => {
-	return postgresServer.shutdown();
-});
+beforeAll(() => postgresServer.start().then(() => ensureDb(true)));
+afterAll(() => postgresServer.shutdown(), 3000);
 
 beforeEach(() => ensureDb(true));
 
@@ -189,4 +183,71 @@ test('can create TSVector columns', async () => {
 	await updateSchemaTo(async seq => {
 		const Foo = seq.define('Foo', {asdf: DataTypes.TSVECTOR});
 	});
+});
+
+test('It uses hints', async () => {
+	/*
+		The first run
+	 */
+	await (async function () {
+		let seq = await initSequelize();
+	
+		const Foo = seq.define("Foo", {
+			foo: DataTypes.INTEGER,
+			fogMachine: DataTypes.INTEGER,
+			stringValue: DataTypes.STRING
+		});
+
+		const mm = new MoldyMeat({sequelize: seq, hints: []});
+		await mm.initialize();
+		await mm.updateSchema();
+
+		// Since no changes to models has happened,
+		// we shouldn't create any hints.
+		let hints = await mm._loadHints();
+		expect(hints.length).toBe(0);
+
+		await seq.close();
+	})();
+
+		jest.spyOn(require('readline'), 'createInterface').mockImplementation(() => {
+			return {
+				question: (qprompt, fn) => {
+					const isRename = qprompt.includes(`Foos(foo) to Foos(food)`)
+							|| qprompt.includes(`Foos(fogMachine) to Foos(brokenFogMachine)`);
+					fn(isRename ? "yes" : "no");
+				},
+				close: () => {}
+			};
+		});
+
+	/*
+		The second run
+	 */
+	await (async function() {
+		const seq = await initSequelize();
+	
+		const Foo = seq.define("Foo", {
+			food: DataTypes.INTEGER,
+			brokenFogMachine: DataTypes.INTEGER,
+			stringValue: DataTypes.STRING
+		});
+
+		const mm = new MoldyMeat({sequelize: seq, hints: []});
+		await mm.initialize();
+		await mm.updateSchema();
+
+		let hints = await mm._loadHints();
+		await seq.close();
+
+		expect(hints.length).toBe(2);
+		expect(hints[0].type).toBe('renameColumn');
+		expect(hints[1].type).toBe('renameColumn');
+		expect(hints[0].body.fromField).toBe('foo');
+		expect(hints[1].body.fromField).toBe('fogMachine');
+		expect(hints[0].body.toField).toBe('food');
+		expect(hints[1].body.toField).toBe('brokenFogMachine');
+		expect(hints[0].body.table).toBe('Foos');
+		expect(hints[1].body.table).toBe('Foos');
+	})();
 });

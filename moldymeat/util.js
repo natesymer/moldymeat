@@ -50,6 +50,7 @@ function boolPrompt(q) {
 			}));
 
 			if (v.length !== 0) {
+				console.log(q, v, TRUTHY);
 				resolve(TRUTHY.includes(v));	
 				break;
 			}
