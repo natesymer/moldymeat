@@ -13,10 +13,10 @@
 </dd>
 </dl>
 
-## Members
+## Functions
 
 <dl>
-<dt><a href="#diff">diff</a> ⇒ <code><a href="#Diff">Diff</a></code></dt>
+<dt><a href="#diff">diff(lhs, rhs)</a> ⇒ <code><a href="#Diff">Diff</a></code></dt>
 <dd><p>Returns the difference between <code>lhs</code> and <code>rhs</code>.</p>
 </dd>
 </dl>
@@ -35,6 +35,7 @@
 * [util](#module_util)
     * [~removeUndefined(obj)](#module_util..removeUndefined) ⇒ <code>object</code>
     * [~objectMap(obj, fn)](#module_util..objectMap) ⇒ <code>object</code>
+    * [~boolPrompt(q)](#module_util..boolPrompt)
 
 <a name="module_util..removeUndefined"></a>
 
@@ -63,6 +64,17 @@ Maps the function fn over obj's entries, returning an object.
 | obj | <code>object</code> | Any object |
 | fn | <code>function</code> | Takes an entry, returns an entry |
 
+<a name="module_util..boolPrompt"></a>
+
+### util~boolPrompt(q)
+Prompts the user for a yes/no answer via CLI.
+
+**Kind**: inner method of [<code>util</code>](#module_util)  
+
+| Param | Type | Description |
+| --- | --- | --- |
+| q | <code>string</code> | The prompt to use. |
+
 <a name="MoldyMeat"></a>
 
 ## MoldyMeat
@@ -80,7 +92,7 @@ The main moldymeat class.
 * [MoldyMeat](#MoldyMeat)
     * [new MoldyMeat(options)](#new_MoldyMeat_new)
     * [.initialize()](#MoldyMeat+initialize) ⇒ [<code>MoldyMeat</code>](#MoldyMeat)
-    * [.updateSchema()](#MoldyMeat+updateSchema)
+    * [.updateSchema(options)](#MoldyMeat+updateSchema)
 
 <a name="new_MoldyMeat_new"></a>
 
@@ -92,6 +104,8 @@ Create a MoldyMeat instance.
 | --- | --- | --- |
 | options | <code>object</code> |  |
 | options.sequelize | <code>Sequelize</code> | The sequelize instance to use. |
+| options.hintsFile | <code>string</code> | The file path to the hints file |
+| options.hitns | <code>string</code> | Hints to use instead of loading them from a file. |
 
 <a name="MoldyMeat+initialize"></a>
 
@@ -102,17 +116,25 @@ Initializes MoldyMeat. Must be called before calling other methods.
 **Returns**: [<code>MoldyMeat</code>](#MoldyMeat) - Returns a reference to this for convenience  
 <a name="MoldyMeat+updateSchema"></a>
 
-### moldyMeat.updateSchema()
+### moldyMeat.updateSchema(options)
 Updates the schema of the database (to which sequelize is connected) to match the
 models in `this.sequelize.models`
 
 **Kind**: instance method of [<code>MoldyMeat</code>](#MoldyMeat)  
+
+| Param | Type | Description |
+| --- | --- | --- |
+| options | <code>object</code> |  |
+| options.forward | <code>bool</code> | Runs the DB updates forward if true, backwards one update if false |
+| options.generateHints | <code>bool</code> | Generates hints if true. Note: Requires an interactive shell if true |
+| options.useHints | <code>bool</code> | Whether or not to use hints. |
+
 <a name="diff"></a>
 
-## diff ⇒ [<code>Diff</code>](#Diff)
+## diff(lhs, rhs) ⇒ [<code>Diff</code>](#Diff)
 Returns the difference between `lhs` and `rhs`.
 
-**Kind**: global variable  
+**Kind**: global function  
 **Returns**: [<code>Diff</code>](#Diff) - The difference between `lhs` and `rhs`.  
 
 | Param | Type |

@@ -13,7 +13,7 @@ const { diff:_diff,
 
 /**
  * Returns the difference between `lhs` and `rhs`.
- * @name diff
+ * @function diff
  * @param {object} lhs
  * @param {object} rhs
  * @returns {Diff} The difference between `lhs` and `rhs`. 
